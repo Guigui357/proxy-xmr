@@ -2,7 +2,7 @@ const WebSocket = require('ws');
 const net = require('net');
 
 // Porta padrão onde o proxy vai escutar o seu site do Netlify
-const PORT = processenv.PORT || 8080; 
+const PORT = 8080; 
 
 const wss = new WebSocket.Server({ port: PORT });
 console.log(`Servidor Proxy WebSocket rodando na porta ${PORT}`);
