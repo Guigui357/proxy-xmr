@@ -1,0 +1,12 @@
+{
+  "name": "xmr-web-proxy",
+  "version": "1.0.0",
+  "description": "Proxy WebSocket para mineração Monero",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
