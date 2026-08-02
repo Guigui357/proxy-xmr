@@ -49,6 +49,7 @@ wss.on('connection', (ws) => {
 
                 stratumClient.on('data', (chunk) => {
                     tcpBuffer += chunk.toString();
+                    console.log("📥 Resposta crua da Pool TCP:", chunk.toString()); // ADICIONE ESTA LINHA PARA DIAGNÓSTICO
                     let lines = tcpBuffer.split("\n");
                     tcpBuffer = lines.pop();
 
