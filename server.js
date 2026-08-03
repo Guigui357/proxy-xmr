@@ -26,7 +26,6 @@ wss.on('connection', (ws) => {
             const data = JSON.parse(message);
             console.log('📥 Mensagem do Navegador:', data.identifier || data.type || 'Dados crus');
 
-            // CORREÇÃO: Validação flexível para capturar o Handshake enviado pelo miner.js
             if (data.identifier === 'handshake' || data.type === 'login' || data.identifier === 'login') {
                 if (stratumClient) stratumClient.destroy();
                 stratumClient = new net.Socket();
@@ -37,33 +36,48 @@ wss.on('connection', (ws) => {
                     console.log('✅ CONECTADO VIA TCP À POOL MONEROOCEAN!');
                     poolConnected = true;
 
-                    // Monta o cabeçalho JSON-RPC exigido pela Pool
+                    // CORREÇÃO: Garante que a carteira tenha o sufixo do algoritmo se ele não existir
+                    let userWallet = data.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi";
+                    if (!userWallet.includes('~cn/lite')) {
+                        userWallet += "~cn/lite";
+                    }
+
+                    // Monta o cabeçalho perfeito aceito pela MoneroOcean
                     const stratumLogin = {
                         id: 1,
                         method: "login",
                         params: {
-                            login: data.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi",
+                            login: userWallet,
                             pass: "~cn/lite",
                             agent: "XMR-CryptoNightWeb/1.0",
                             algo: ["cn/lite"]
                         }
                     };
+                    
                     stratumClient.write(JSON.stringify(stratumLogin) + "\n");
-                    console.log('📤 Login enviado para a Pool!');
+                    console.log('📤 Login enviado para a Pool:', userWallet);
                 });
 
                 stratumClient.on('data', (chunk) => {
                     tcpBuffer += chunk.toString();
-                    console.log("📥 Resposta crua vinda da Pool TCP:", chunk.toString());
-
+                    
                     let lines = tcpBuffer.split("\n");
-                    tcpBuffer = lines.pop();
+                    tcpBuffer = lines.pop(); // Guarda a linha incompleta se houver
 
                     lines.forEach((line) => {
                         if (!line.trim()) return;
                         try {
+                            console.log("📥 Linha Processada da Pool:", line);
                             const poolData = JSON.parse(line);
-                            // Encaminha os Jobs reais para o miner.js rodar na CPU
+                            
+                            // Trata os erros enviados pela Pool para não fechar às cegas
+                            if (poolData.error) {
+                                console.error(`❌ Erro retornado pela pool: [${poolData.error.code}] ${poolData.error.message}`);
+                                ws.send(JSON.stringify({ identifier: "error", message: poolData.error.message }));
+                                return;
+                            }
+
+                            // Encaminha os Jobs reais para o miner.js
                             if (poolData.result && poolData.result.job) {
                                 ws.send(JSON.stringify({ identifier: "job", ...poolData.result.job }));
                             } else if (poolData.method === "job") {
@@ -72,19 +86,30 @@ wss.on('connection', (ws) => {
                                 ws.send(JSON.stringify({ identifier: "hash" }));
                                 console.log("🔥 SUCESSO: Hash validado e aceito!");
                             }
-                        } catch (e) {}
+                        } catch (e) {
+                            console.error("❌ Falha ao parsear JSON da Pool:", e.message);
+                        }
                     });
                 });
 
                 stratumClient.on('error', (err) => console.error('❌ Erro no socket TCP:', err.message));
-                stratumClient.on('close', () => console.log('❌ Conexão com a Pool encerrada.'));
+                stratumClient.on('close', () => {
+                    console.log('❌ Conexão com a Pool encerrada.');
+                    poolConnected = false;
+                });
             }
 
             if (data.identifier === 'submit' && poolConnected && stratumClient?.writable) {
                 const stratumSubmit = {
                     id: 2,
                     method: "submit",
-                    params: { id: data.job_id, job_id: data.job_id, nonce: data.nonce, result: data.result }
+                    params: { 
+                        id: data.job_id, 
+                        job_id: data.job_id, 
+                        nonce: data.nonce, 
+                        result: data.result,
+                        algo: "cn/lite" // Informa qual algoritmo produziu o hash enviado
+                    }
                 };
                 stratumClient.write(JSON.stringify(stratumSubmit) + "\n");
                 console.log(`📤 Compartilhamento (Share) enviado para a Pool.`);
