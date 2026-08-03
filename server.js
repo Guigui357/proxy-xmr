@@ -33,7 +33,7 @@ wss.on('connection', (ws) => {
                 
                 console.log('⏳ Tentando abrir socket TCP com a Pool MoneroOcean...');
                 
-                stratumClient.connect(18081, 'gulf.moneroocean.stream', () => {
+                stratumClient.connect(10001, 'gulf.moneroocean.stream', () => {
                     console.log('✅ CONECTADO VIA TCP À POOL MONEROOCEAN!');
                     poolConnected = true;
 
