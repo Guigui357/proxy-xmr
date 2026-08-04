@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 8080;
 const serverHttp = http.createServer((req, res) => {
     cors()(req, res, () => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Proxy CryptoNight Ativo e Live!');
+        res.end('Proxy MoneroOcean Ativo e Live!');
     });
 });
 
@@ -20,14 +20,17 @@ wss.on('connection', (ws) => {
     let stratumClient = null;
     let poolConnected = false;
     let tcpBuffer = "";
+    let lastClientRpcId = 1; // Guarda o ID original para responder à thread C++
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            console.log('📥 Mensagem do Navegador:', data.identifier || data.type || 'Dados crus');
+            console.log('📥 Mensagem do Navegador:', data.method || data.identifier || 'Dados crus');
 
-            // Validação flexível para capturar o Handshake enviado pelo miner.js
-            if (data.identifier === 'handshake' || data.type === 'login' || data.identifier === 'login') {
+            if (data.id) lastClientRpcId = data.id;
+
+            // 1. TRATAMENTO DE LOGIN (Nativo JSON-RPC ou Customizado)
+            if (data.method === 'login' || data.identifier === 'handshake' || data.identifier === 'login') {
                 if (stratumClient) stratumClient.destroy();
                 stratumClient = new net.Socket();
                 
@@ -37,26 +40,21 @@ wss.on('connection', (ws) => {
                     console.log('✅ CONECTADO VIA TCP À POOL MONEROOCEAN!');
                     poolConnected = true;
 
-                    // Captura a carteira enviada ou usa a padrão de contingência
-                    let userWallet = data.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi";
+                    // Captura os parâmetros conforme a estrutura enviada pelo C++ ou fallback
+                    const params = data.params || {};
+                    let userWallet = params.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi";
                     
-                    // CORREÇÃO: Formata a carteira adicionando o worker e o sufixo separadamente
                     if (!userWallet.includes('~cn/lite')) {
-                        if (!userWallet.includes('.')) {
-                            userWallet += ".webMiner~cn/lite";
-                        } else {
-                            userWallet += "~cn/lite";
-                        }
+                        userWallet += userWallet.includes('.') ? "~cn/lite" : ".webMiner~cn/lite";
                     }
 
-                    // Monta o cabeçalho perfeito aceito pela MoneroOcean
                     const stratumLogin = {
-                        id: 1,
+                        id: lastClientRpcId,
                         method: "login",
                         params: {
                             login: userWallet,
-                            pass: "~cn/lite",
-                            agent: "XMR-CryptoNightWeb/1.0",
+                            pass: params.pass || "~cn/lite",
+                            agent: params.agent || "XMR-CryptoNightWeb/1.0",
                             algo: ["cn/lite"]
                         }
                     };
@@ -67,9 +65,8 @@ wss.on('connection', (ws) => {
 
                 stratumClient.on('data', (chunk) => {
                     tcpBuffer += chunk.toString();
-                    
                     let lines = tcpBuffer.split("\n");
-                    tcpBuffer = lines.pop(); // Guarda a linha incompleta se houver
+                    tcpBuffer = lines.pop();
 
                     lines.forEach((line) => {
                         if (!line.trim()) return;
@@ -77,24 +74,45 @@ wss.on('connection', (ws) => {
                             console.log("📥 Linha Processada da Pool:", line);
                             const poolData = JSON.parse(line);
                             
-                            // Trata os erros enviados pela Pool para não fechar às cegas
+                            // Erro retornado pela pool -> Envelopa de volta em JSON-RPC
                             if (poolData.error) {
-                                console.error(`❌ Erro retornado pela pool: [${poolData.error.code}] ${poolData.error.message}`);
-                                ws.send(JSON.stringify({ identifier: "error", message: poolData.error.message }));
+                                console.error(`❌ Erro da pool: [${poolData.error.code}] ${poolData.error.message}`);
+                                ws.send(JSON.stringify({
+                                    jsonrpc: "2.0",
+                                    id: poolData.id || lastClientRpcId,
+                                    error: poolData.error
+                                }));
                                 return;
                             }
 
-                            // Encaminha os Jobs reais para o miner.js
+                            // Captura e Padroniza mensagens de "job" vindas da Pool
                             if (poolData.result && poolData.result.job) {
-                                ws.send(JSON.stringify({ identifier: "job", ...poolData.result.job }));
+                                ws.send(JSON.stringify({
+                                    jsonrpc: "2.0",
+                                    method: "job",
+                                    params: poolData.result.job
+                                }));
                             } else if (poolData.method === "job") {
-                                ws.send(JSON.stringify({ identifier: "job", ...poolData.params }));
+                                ws.send(JSON.stringify({
+                                    jsonrpc: "2.0",
+                                    method: "job",
+                                    params: poolData.params
+                                }));
                             } else if (poolData.result && poolData.result.status === "OK") {
-                                ws.send(JSON.stringify({ identifier: "hash" }));
-                                console.log("🔥 SUCESSO: Hash validado e aceito!");
+                                // Confirmação de Share Aceito
+                                ws.send(JSON.stringify({
+                                    jsonrpc: "2.0",
+                                    id: poolData.id || lastClientRpcId,
+                                    result: { status: "OK" },
+                                    error: null
+                                }));
+                                console.log("🔥 SUCESSO: Hash validado e aceito pela Pool!");
+                            } else {
+                                // Encaminha qualquer outra resposta genérica mantendo a integridade do JSON
+                                ws.send(JSON.stringify(poolData));
                             }
                         } catch (e) {
-                            console.error("❌ Falha ao parsear JSON da Pool:", e.message);
+                            console.error("❌ Falha ao processar JSON da Pool:", e.message);
                         }
                     });
                 });
@@ -106,20 +124,23 @@ wss.on('connection', (ws) => {
                 });
             }
 
-            if (data.identifier === 'submit' && poolConnected && stratumClient?.writable) {
+            // 2. TRATAMENTO DE ENVIO DE SHARE (Nativo JSON-RPC ou Customizado)
+            const isSubmit = data.method === 'submit' || data.identifier === 'submit';
+            if (isSubmit && poolConnected && stratumClient?.writable) {
+                const params = data.params || data;
                 const stratumSubmit = {
-                    id: 2,
+                    id: lastClientRpcId,
                     method: "submit",
                     params: { 
-                        id: data.job_id, 
-                        job_id: data.job_id, 
-                        nonce: data.nonce, 
-                        result: data.result,
-                        algo: "cn/lite" // Informa qual algoritmo produziu o hash enviado
+                        id: params.id || params.job_id, 
+                        job_id: params.job_id || params.id, 
+                        nonce: params.nonce, 
+                        result: params.result,
+                        algo: "cn/lite" 
                     }
                 };
                 stratumClient.write(JSON.stringify(stratumSubmit) + "\n");
-                console.log(`📤 Compartilhamento (Share) enviado para a Pool.`);
+                console.log(`📤 Compartilhamento (Share ID: ${params.job_id || params.id}) enviado para a Pool.`);
             }
         } catch (err) {
             console.error('❌ Erro no processamento do WebSocket:', err.message);
