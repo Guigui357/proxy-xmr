@@ -49,8 +49,8 @@ wss.on('connection', (ws) => {
                         method: "login",
                         params: {
                             login: userWallet,
-                            pass: params.pass || "x"
-                            agent: params.agent || "XMR-CryptoNightWeb/1.0",
+                            pass: params.pass || "x",
+                            agent: params.agent || "XMR-CryptoNightWeb/1.0"
                         }
                     };
                     
