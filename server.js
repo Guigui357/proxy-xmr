@@ -43,19 +43,14 @@ wss.on('connection', (ws) => {
                     // Captura os parâmetros conforme a estrutura enviada pelo C++ ou fallback
                     const params = data.params || {};
                     let userWallet = params.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi";
-                    
-                    if (!userWallet.includes('~cn/lite')) {
-                        userWallet += userWallet.includes('.') ? "~cn/lite" : ".webMiner~cn/lite";
-                    }
 
                     const stratumLogin = {
                         id: lastClientRpcId,
                         method: "login",
                         params: {
                             login: userWallet,
-                            pass: params.pass || "~cn/lite",
+                            pass: params.pass || "x"
                             agent: params.agent || "XMR-CryptoNightWeb/1.0",
-                            algo: ["cn/lite"]
                         }
                     };
                     
