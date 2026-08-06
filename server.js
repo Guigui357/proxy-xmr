@@ -68,7 +68,7 @@ wss.on('connection', (ws) => {
                 console.log(`⏳ Abrindo socket TCP com a carteira do usuário: ${userWallet}`);
                 
                 // Só abre o TCP agora, garantindo que o login vá junto imediatamente
-                stratumClient.connect(10001, 'gulf.moneroocean.stream', () => {
+                stratumClient.connect(443, 'gulf.moneroocean.stream', () => {
                     console.log('✅ CONECTADO VIA TCP À POOL MONEROOCEAN!');
                     poolConnected = true;
 
