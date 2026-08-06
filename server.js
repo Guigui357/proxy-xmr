@@ -5,6 +5,7 @@ const cors = require('cors');
 
 const PORT = process.env.PORT || 8080;
 
+// 1. CRIAÇÃO DO SERVIDOR HTTP COM SUPORTE A CORS
 const serverHttp = http.createServer((req, res) => {
     cors()(req, res, () => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -12,6 +13,7 @@ const serverHttp = http.createServer((req, res) => {
     });
 });
 
+// 2. CRIAÇÃO DO SERVIDOR WEBSOCKET
 const wss = new WebSocket.Server({ server: serverHttp });
 console.log(`🚀 Proxy Stratum ativo na porta ${PORT}`);
 
@@ -29,7 +31,9 @@ wss.on('connection', (ws) => {
 
             if (data.id) lastClientRpcId = data.id;
 
-            // 1. TRATAMENTO DE LOGIN (Nativo JSON-RPC ou Customizado)
+            // =================================================================
+            // TRATAMENTO DE LOGIN / HANDSHAKE (Nativo JSON-RPC ou Customizado)
+            // =================================================================
             if (data.method === 'login' || data.identifier === 'handshake' || data.identifier === 'login') {
                 if (stratumClient) stratumClient.destroy();
                 stratumClient = new net.Socket();
@@ -40,7 +44,7 @@ wss.on('connection', (ws) => {
                     console.log('✅ CONECTADO VIA TCP À POOL MONEROOCEAN!');
                     poolConnected = true;
 
-                    // Captura os parâmetros conforme a estrutura enviada pelo C++ ou fallback
+                    // Captura os parâmetros do C++ ou usa a carteira padrão de fallback
                     const params = data.params || {};
                     let userWallet = params.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi";
 
@@ -58,6 +62,9 @@ wss.on('connection', (ws) => {
                     console.log('📤 Login enviado para a Pool:', userWallet);
                 });
 
+                // =================================================================
+                // PROCESSAMENTO DOS DADOS VINDOS DA POOL TCP -> NAVEGADOR
+                // =================================================================
                 stratumClient.on('data', (chunk) => {
                     tcpBuffer += chunk.toString();
                     let lines = tcpBuffer.split("\n");
@@ -69,43 +76,62 @@ wss.on('connection', (ws) => {
                             console.log("📥 Linha Processada da Pool:", line);
                             const poolData = JSON.parse(line);
                             
-                            // Erro retornado pela pool -> Envelopa de volta em JSON-RPC
+                            // 1. ERRO RETORNADO PELA POOL
                             if (poolData.error) {
                                 console.error(`❌ Erro da pool: [${poolData.error.code}] ${poolData.error.message}`);
                                 ws.send(JSON.stringify({
-                                    jsonrpc: "2.0",
-                                    id: poolData.id || lastClientRpcId,
-                                    error: poolData.error
+                                    identifier: "error",
+                                    message: poolData.error.message
                                 }));
                                 return;
                             }
 
-                            // Captura e Padroniza mensagens de "job" vindas da Pool
+                            // 2. CAPTURA E CONVERSÃO DE JOBS DA POOL PARA O PADRÃO EXIGIDO PELO C++
+                            let rawJob = null;
                             if (poolData.result && poolData.result.job) {
-                                ws.send(JSON.stringify({
-                                    jsonrpc: "2.0",
-                                    method: "job",
-                                    params: poolData.result.job
-                                }));
+                                rawJob = poolData.result.job;
                             } else if (poolData.method === "job") {
+                                rawJob = poolData.params;
+                            }
+
+                            if (rawJob) {
+                                const cplusplusJob = {
+                                    identifier: "job",
+                                    job_id: rawJob.job_id,
+                                    blob: rawJob.blob,
+                                    target: rawJob.target,
+                                    height: Number(rawJob.height || 0),
+                                    seed_hash: rawJob.seed_hash || ""
+                                };
+                                ws.send(JSON.stringify(cplusplusJob));
+                                console.log("🎯 Job encapsulado e enviado em formato plano para o C++!");
+                                return;
+                            }
+
+                            // 3. RETORNO DE AUTENTICAÇÃO (Evita o Timeout de Handshake no C++)
+                            if (poolData.id === lastClientRpcId && poolData.result && poolData.result.id) {
                                 ws.send(JSON.stringify({
-                                    jsonrpc: "2.0",
-                                    method: "job",
-                                    params: poolData.params
+                                    identifier: "handshake_reply",
+                                    status: "authenticated",
+                                    session: poolData.result.id
                                 }));
-                            } else if (poolData.result && poolData.result.status === "OK") {
-                                // Confirmação de Share Aceito
-                                ws.send(JSON.stringify({
-                                    jsonrpc: "2.0",
-                                    id: poolData.id || lastClientRpcId,
-                                    result: { status: "OK" },
-                                    error: null
+                                console.log("🔑 Handshake validado e liberado para a Thread do C++.");
+                                return;
+                            }
+
+                            // 4. CONFIRMAÇÃO DE SHARE ACEITO
+                            if (poolData.result && poolData.result.status === "OK") {
+                                ws.send(JSON.stringify({ 
+                                    identifier: "share_reply", 
+                                    status: "OK" 
                                 }));
                                 console.log("🔥 SUCESSO: Hash validado e aceito pela Pool!");
-                            } else {
-                                // Encaminha qualquer outra resposta genérica mantendo a integridade do JSON
-                                ws.send(JSON.stringify(poolData));
+                                return;
                             }
+
+                            // Fallback de contingência caso venha alguma estrutura nova do Stratum
+                            ws.send(JSON.stringify(poolData));
+
                         } catch (e) {
                             console.error("❌ Falha ao processar JSON da Pool:", e.message);
                         }
@@ -119,10 +145,14 @@ wss.on('connection', (ws) => {
                 });
             }
 
-            // 2. TRATAMENTO DE ENVIO DE SHARE (Nativo JSON-RPC ou Customizado)
+            // =================================================================
+            // TRATAMENTO DE ENVIO DE SHARE (C++ -> PROXY -> POOL)
+            // =================================================================
             const isSubmit = data.method === 'submit' || data.identifier === 'submit';
             if (isSubmit && poolConnected && stratumClient?.writable) {
                 const params = data.params || data;
+                
+                // Reconstrói a requisição em JSON-RPC padrão aceito pela Pool Stratum
                 const stratumSubmit = {
                     id: lastClientRpcId,
                     method: "submit",
@@ -142,7 +172,13 @@ wss.on('connection', (ws) => {
         }
     });
 
-    ws.on('close', () => { if (stratumClient) stratumClient.destroy(); });
+    ws.on('close', () => { 
+        console.log('🔌 Conexão WebSocket com o navegador fechada.');
+        if (stratumClient) stratumClient.destroy(); 
+    });
 });
 
-serverHttp.listen(PORT);
+// Inicializa o servidor escutando na porta designada
+serverHttp.listen(PORT, () => {
+    console.log(`🌐 Servidor HTTP rodando de forma estável na porta ${PORT}`);
+});
