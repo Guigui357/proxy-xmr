@@ -73,9 +73,8 @@ wss.on('connection', (ws) => {
                     stratumClient.write(JSON.stringify(stratumLogin) + "\n");
                     console.log('📤 Login dinâmico enviado para a Pool.');
                 });
-
                 // =================================================================
-                // PROCESSAMENTO DOS DADOS VINDOS DA POOL TCP -> NAVEGADOR (C++)
+                // PROCESSAMENTO DOS DADOS VINDOS DA POOL TCP -> NAVEGADOR (CORRIGIDO)
                 // =================================================================
                 stratumClient.on('data', (chunk) => {
                     tcpBuffer += chunk.toString();
@@ -88,17 +87,18 @@ wss.on('connection', (ws) => {
                             console.log("📥 Linha Processada da Pool:", line);
                             const poolData = JSON.parse(line);
                             
-                            if (poolData.error) {
+                            // 1. ERRO RETORNADO PELA POOL
+                            if (poolData && poolData.error) {
                                 console.error(`❌ Erro da pool: [${poolData.error.code}] ${poolData.error.message}`);
                                 ws.send(JSON.stringify({ identifier: "error", message: poolData.error.message }));
                                 return;
                             }
 
-                            // 1. CAPTURA E CONVERSÃO DE JOBS PARA O FORMATO PLANO DO C++
+                            // 2. CAPTURA E CONVERSÃO DE JOBS PARA O FORMATO PLANO DO C++
                             let rawJob = null;
-                            if (poolData.result && poolData.result.job) {
+                            if (poolData && poolData.result && poolData.result.job) {
                                 rawJob = poolData.result.job;
-                            } else if (poolData.method === "job") {
+                            } else if (poolData && poolData.method === "job") {
                                 rawJob = poolData.params;
                             }
 
@@ -116,8 +116,8 @@ wss.on('connection', (ws) => {
                                 return;
                             }
 
-                            // 2. RETORNO DE AUTENTICAÇÃO (Desbloqueia o wait_for do C++)
-                            if (poolData.id === lastClientRpcId && poolData.result && poolData.result.id) {
+                            // 3. RETORNO DE AUTENTICAÇÃO SEGURA (Evita quebra por propriedade nula)
+                            if (poolData && poolData.id === lastClientRpcId && poolData.result && typeof poolData.result === 'object' && poolData.result.id) {
                                 ws.send(JSON.stringify({
                                     identifier: "handshake_reply",
                                     status: "authenticated",
@@ -127,14 +127,15 @@ wss.on('connection', (ws) => {
                                 return;
                             }
 
-                            // 3. CONFIRMAÇÃO DE SHARE ACEITO
-                            if (poolData.result && poolData.result.status === "OK") {
+                            // 4. CONFIRMAÇÃO DE SHARE ACEITO
+                            if (poolData && poolData.result && poolData.result.status === "OK") {
                                 ws.send(JSON.stringify({ identifier: "share_reply", status: "OK" }));
                                 console.log("🔥 SUCESSO: Hash validado e aceito pela Pool!");
                                 return;
                             }
 
-                            ws.send(JSON.stringify(poolData));
+                            // Envia se for qualquer outra mensagem sem quebrar o processo
+                            if (poolData) ws.send(JSON.stringify(poolData));
 
                         } catch (e) {
                             console.error("❌ Falha ao processar JSON da Pool:", e.message);
