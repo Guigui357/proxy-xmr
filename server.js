@@ -15,14 +15,27 @@ const serverHttp = http.createServer((req, res) => {
 
 // 2. CRIAÇÃO DO SERVIDOR WEBSOCKET
 const wss = new WebSocket.Server({ 
-    server: serverHttp,
-    path: '/ws', // Rota isolada exclusiva para mineração
-    handleProtocols: (protocols, request) => {
+    noServer: true, // Controle manual do upgrade de protocolo
+    path: '/ws',
+    handleProtocols: (protocols) => {
         return protocols.size > 0 ? Array.from(protocols)[0] : false;
     }
 });
 
-console.log(`🚀 Proxy Stratum ativo na porta ${PORT}`);
+// Intercepta e valida o upgrade de rota de forma explícita
+serverHttp.on('upgrade', (request, socket, head) => {
+    const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+
+    if (pathname === '/ws') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request);
+        });
+    } else {
+        socket.destroy();
+    }
+});
+
+console.log(`🚀 Proxy Stratum orquestrado na porta ${PORT}`);
 
 wss.on('connection', (ws) => {
     console.log('🔗 SINAL RECEBIDO: O navegador conectou com o Proxy!');
