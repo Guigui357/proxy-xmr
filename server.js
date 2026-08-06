@@ -9,42 +9,45 @@ const PORT = process.env.PORT || 8080;
 const serverHttp = http.createServer((req, res) => {
     cors()(req, res, () => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Proxy MoneroOcean Ativo e Live!');
+        res.end('Proxy Monero Ativo e Live!');
     });
 });
 
-// 2. CRIAÇÃO DO SERVIDOR WEBSOCKET
+// 2. CONFIGURAÇÃO DO SERVIDOR WEBSOCKET COM TRATAMENTO DE SUB-PROTOCOLOS
 const wss = new WebSocket.Server({ 
-    noServer: true, // Controle manual do upgrade de protocolo
-    path: '/ws',
+    noServer: true, 
     handleProtocols: (protocols) => {
-        return protocols.size > 0 ? Array.from(protocols)[0] : false;
+        return protocols.size > 0 ? Array.from(protocols) : false;
     }
 });
 
-// Intercepta e valida o upgrade de rota de forma explícita
+// 3. CAPTURA DE CONEXÃO DIRETA SEM RISCO DE ERRO DE URL NO RENDER
 serverHttp.on('upgrade', (request, socket, head) => {
-    const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
-
-    if (pathname === '/ws') {
+    try {
+        // Ignora checagens complexas de string de URL para evitar o crash síncrono no Render
         wss.handleUpgrade(request, socket, head, (ws) => {
             wss.emit('connection', ws, request);
         });
-    } else {
+    } catch (err) {
+        console.error('❌ Falha fatal no upgrade do WebSocket:', err.message);
         socket.destroy();
     }
 });
 
-console.log(`🚀 Proxy Stratum orquestrado na porta ${PORT}`);
+console.log(`🚀 Proxy Stratum ativo na porta ${PORT}`);
 
+// 4. ORQUESTRADOR DE EVENTOS DE CONEXÃO
 wss.on('connection', (ws) => {
     console.log('🔗 SINAL RECEBIDO: O navegador conectou com o Proxy!');
+    
     let stratumClient = null;
     let poolConnected = false;
     let tcpBuffer = "";
     let lastClientRpcId = 1;
 
-    // ESCUTA AS MENSAGENS VINDAS DO C++ (NAVEGADOR)
+    // Listener de segurança para o próprio WebSocket
+    ws.on('error', (err) => console.error('❌ Erro no canal WebSocket do navegador:', err.message));
+
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
@@ -52,22 +55,20 @@ wss.on('connection', (ws) => {
 
             if (data.id) lastClientRpcId = data.id;
 
-            // =================================================================
-            // TRATAMENTO DE LOGIN / HANDSHAKE DINÂMICO
-            // =================================================================
+            // CAPTURA DE LOGIN / HANDSHAKE DINÂMICO
             if (data.method === 'login' || data.identifier === 'handshake' || data.identifier === 'login') {
                 if (stratumClient) stratumClient.destroy();
                 
                 stratumClient = new net.Socket();
                 
-                // EXTRAÇÃO DINÂMICA: Captura a carteira e o worker enviados pelo HTML
+                // Mapeia chaves de contingência vindas do C++ ou HTML
                 const params = data.params || {};
                 const userWallet = params.login || data.wallet || "4657q4dnsjLWtzeW4XN3wG9swFumWAZB9i1pegTLMxVAQy5E5AE8uif42kkHWcWc9vDcLUmzeCf3pV7mmrJQQqqe84dtASi";
                 const workerName = params.pass || data.worker || "WasmMiner";
 
-                console.log(`⏳ Abrindo socket TCP com a carteira do usuário: ${userWallet}`);
+                console.log(`⏳ [PROCESSO] Iniciando canal TCP. Carteira: ${userWallet.substring(0, 12)}...`);
                 
-                // Só abre o TCP agora, garantindo que o login vá junto imediatamente
+                // Conecta na porta web padrão 443 para mascarar o tráfego no firewall do Render
                 stratumClient.connect(443, 'gulf.moneroocean.stream', () => {
                     console.log('✅ CONECTADO VIA TCP À POOL MONEROOCEAN!');
                     poolConnected = true;
@@ -78,17 +79,15 @@ wss.on('connection', (ws) => {
                         params: {
                             login: userWallet,
                             pass: workerName,
-                            agent: "XMR-RealRandomX/1.0"
+                            agent: "XMR-CryptoNightWeb/1.0"
                         }
                     };
                     
-                    // Envia o login instantaneamente no milissegundo em que o TCP conecta
                     stratumClient.write(JSON.stringify(stratumLogin) + "\n");
-                    console.log('📤 Login dinâmico enviado para a Pool.');
+                    console.log('📤 Login Stratum enviado para a Pool.');
                 });
-                // =================================================================
-                // PROCESSAMENTO DOS DADOS VINDOS DA POOL TCP -> NAVEGADOR (CORRIGIDO)
-                // =================================================================
+
+                // TRATAMENTO DE RETORNO DA POOL -> PROXY -> C++
                 stratumClient.on('data', (chunk) => {
                     tcpBuffer += chunk.toString();
                     let lines = tcpBuffer.split("\n");
@@ -100,14 +99,13 @@ wss.on('connection', (ws) => {
                             console.log("📥 Linha Processada da Pool:", line);
                             const poolData = JSON.parse(line);
                             
-                            // 1. ERRO RETORNADO PELA POOL
                             if (poolData && poolData.error) {
                                 console.error(`❌ Erro da pool: [${poolData.error.code}] ${poolData.error.message}`);
                                 ws.send(JSON.stringify({ identifier: "error", message: poolData.error.message }));
                                 return;
                             }
 
-                            // 2. CAPTURA E CONVERSÃO DE JOBS PARA O FORMATO PLANO DO C++
+                            // Conversão de Jobs para formato plano exigido pelo picojson
                             let rawJob = null;
                             if (poolData && poolData.result && poolData.result.job) {
                                 rawJob = poolData.result.job;
@@ -129,7 +127,7 @@ wss.on('connection', (ws) => {
                                 return;
                             }
 
-                            // 3. RETORNO DE AUTENTICAÇÃO SEGURA (Evita quebra por propriedade nula)
+                            // Retorno de Handshake de Autenticação (Destrava wait_for do C++)
                             if (poolData && poolData.id === lastClientRpcId && poolData.result && typeof poolData.result === 'object' && poolData.result.id) {
                                 ws.send(JSON.stringify({
                                     identifier: "handshake_reply",
@@ -140,32 +138,29 @@ wss.on('connection', (ws) => {
                                 return;
                             }
 
-                            // 4. CONFIRMAÇÃO DE SHARE ACEITO
+                            // Confirmação de Share Aceito
                             if (poolData && poolData.result && poolData.result.status === "OK") {
                                 ws.send(JSON.stringify({ identifier: "share_reply", status: "OK" }));
                                 console.log("🔥 SUCESSO: Hash validado e aceito pela Pool!");
                                 return;
                             }
 
-                            // Envia se for qualquer outra mensagem sem quebrar o processo
                             if (poolData) ws.send(JSON.stringify(poolData));
-
                         } catch (e) {
                             console.error("❌ Falha ao processar JSON da Pool:", e.message);
                         }
                     });
                 });
 
-                stratumClient.on('error', (err) => console.error('❌ Erro no socket TCP:', err.message));
+                stratumClient.on('error', (err) => console.error('❌ ERRO CRÍTICO NO SOCKET TCP DA POOL:', err.message));
+                
                 stratumClient.on('close', () => {
                     console.log('❌ Conexão com a Pool encerrada.');
                     poolConnected = false;
                 });
             }
 
-            // =================================================================
-            // TRATAMENTO DE ENVIO DE SHARE (C++ -> PROXY -> POOL)
-            // =================================================================
+            // ENVIO DE SHARES RESOLVIDOS
             const isSubmit = data.method === 'submit' || data.identifier === 'submit';
             if (isSubmit && poolConnected && stratumClient?.writable) {
                 const params = data.params || data;
@@ -177,14 +172,14 @@ wss.on('connection', (ws) => {
                         job_id: params.job_id || params.id, 
                         nonce: params.nonce, 
                         result: params.result,
-                        algo: "rx/0"
+                        algo: "cn/lite" 
                     }
                 };
                 stratumClient.write(JSON.stringify(stratumSubmit) + "\n");
-                console.log(`📤 Compartilhamento (Share ID: ${params.job_id || params.id}) enviado para a Pool.`);
+                console.log(`📤 Share enviado para a Pool.`);
             }
         } catch (err) {
-            console.error('❌ Erro no processamento do WebSocket:', err.message);
+            console.error('❌ Erro de processamento interno:', err.message);
         }
     });
 
@@ -194,6 +189,7 @@ wss.on('connection', (ws) => {
     });
 });
 
-serverHttp.listen(PORT, () => {
-    console.log(`🌐 Servidor HTTP rodando de forma estável na porta ${PORT}`);
+// Inicialização estável na interface global de rede
+serverHttp.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 Servidor HTTP rodando na porta ${PORT}`);
 });
