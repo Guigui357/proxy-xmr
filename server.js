@@ -14,7 +14,14 @@ const serverHttp = http.createServer((req, res) => {
 });
 
 // 2. CRIAÇÃO DO SERVIDOR WEBSOCKET
-const wss = new WebSocket.Server({ server: serverHttp });
+const wss = new WebSocket.Server({ 
+    server: serverHttp,
+    path: '/ws', // Rota isolada exclusiva para mineração
+    handleProtocols: (protocols, request) => {
+        return protocols.size > 0 ? Array.from(protocols)[0] : false;
+    }
+});
+
 console.log(`🚀 Proxy Stratum ativo na porta ${PORT}`);
 
 wss.on('connection', (ws) => {
