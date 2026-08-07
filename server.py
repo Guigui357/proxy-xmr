@@ -6,7 +6,7 @@ import sys
 # Configuração de Porta dinamicamente compatível com o ambiente local e Render
 PORT = int(os.environ.get("PORT", 8080))
 POOL_HOST = "gulf.moneroocean.stream"
-POOL_PORT = 443  # Usando a porta 443 para mascarar o tráfego e burlar firewalls
+POOL_PORT = 10128  # Usando a porta 443 para mascarar o tráfego e burlar firewalls
 
 async def handle_stratum_to_cplusplus(pool_reader, ws):
     """Captura os dados vindos da Pool via TCP, trata e repassa para o C++ via WebSocket"""
