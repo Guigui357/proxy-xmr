@@ -6,13 +6,25 @@ const PORT = process.env.PORT || 8080;
 const POOL_HOST = "gulf.moneroocean.stream";
 const POOL_PORT = 10128; // porta Stratum TCP
 
-const server = new WebSocket.Server({
-    port: PORT
+const httpServer = http.createServer((req, res) => {
+
+    res.writeHead(200);
+
+    res.end("Proxy online");
+
 });
+
+const wss = new WebSocket.Server({
+
+    server: httpServer
+
+});
+
+
 
 console.log(`🚀 Proxy Stratum Node ativo na porta ${PORT}`);
 
-server.on("connection", (ws) => {
+wss.on("connection", (ws) => {
     console.log("🔗 Cliente WebSocket conectado");
 
     let poolSocket = null;
