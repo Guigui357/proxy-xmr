@@ -18,7 +18,7 @@ server.on("connection", (ws) => {
     let poolSocket = null;
     let buffer = "";
 
-
+    console.log("🔗 WebSocket conectado:", req.headers);
     ws.on("message", (msg)=>{
         console.log("RAW CLIENTE:", msg.toString());
     });
