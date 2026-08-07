@@ -7,6 +7,7 @@ const PORT = process.env.PORT || 8080;
 const POOL_HOST = "gulf.moneroocean.stream";
 const POOL_PORT = 10128;
 
+
 const httpServer = http.createServer((req, res) => {
     res.writeHead(200, {
         "Content-Type": "text/plain"
@@ -21,43 +22,49 @@ const wss = new WebSocket.Server({
 });
 
 
-console.log(`🚀 Proxy iniciado na porta ${PORT}`);
+console.log("🚀 Proxy iniciado");
 
 
 wss.on("connection", (ws, req) => {
 
-    console.log("\n🔗 Cliente WebSocket conectado");
+    console.log("\n🔗 WASM conectado");
     console.log("Origin:", req.headers.origin);
 
 
     let pool = null;
-    let poolBuffer = "";
+    let buffer = "";
+    let loginData = null;
 
 
-    function sendClient(obj){
+
+    function sendClient(data){
 
         if(ws.readyState === WebSocket.OPEN){
 
-            ws.send(JSON.stringify(obj));
+            const msg = JSON.stringify(data);
 
-            console.log("📤 WASM <-", obj);
+            console.log("📤 -> WASM:", msg);
 
+            ws.send(msg);
         }
 
     }
 
 
-    function connectPool(loginData){
+
+    function connectPool(data){
+
+        loginData = data;
+
 
         if(pool){
 
             pool.destroy();
-            pool = null;
 
         }
 
 
-        console.log("🔌 Conectando na pool...");
+        console.log("🔌 Conectando pool...");
 
 
         pool = net.createConnection({
@@ -68,14 +75,16 @@ wss.on("connection", (ws, req) => {
         });
 
 
+
         pool.on("connect",()=>{
+
 
             console.log("✅ Pool conectada");
 
 
             const login = {
 
-                id: loginData.id || 1,
+                id: data.id || 1,
 
                 jsonrpc:"2.0",
 
@@ -84,23 +93,29 @@ wss.on("connection", (ws, req) => {
                 params:{
 
                     login:
-                        loginData.params?.login ||
-                        loginData.login ||
-                        "",
+                    data.params?.login ||
+                    data.login ||
+                    "",
+
 
                     pass:
-                        loginData.params?.pass ||
-                        "x",
+                    data.params?.pass ||
+                    "x",
+
 
                     agent:
-                        "MoneroWebMiner/1.0"
+                    data.params?.agent ||
+                    "MoneroMiner/1.0.0"
 
                 }
 
             };
 
 
-            console.log("📤 Pool <-", login);
+            console.log(
+                "📤 -> POOL:",
+                JSON.stringify(login)
+            );
 
 
             pool.write(
@@ -112,15 +127,26 @@ wss.on("connection", (ws, req) => {
 
 
 
+
         pool.on("data",(chunk)=>{
 
 
-            poolBuffer += chunk.toString();
+            const raw = chunk.toString();
 
 
-            const lines = poolBuffer.split("\n");
+            console.log(
+                "📥 POOL RAW:",
+                raw
+            );
 
-            poolBuffer = lines.pop();
+
+            buffer += raw;
+
+
+            const lines = buffer.split("\n");
+
+
+            buffer = lines.pop();
 
 
 
@@ -131,77 +157,126 @@ wss.on("connection", (ws, req) => {
                     continue;
 
 
-                console.log("📥 Pool ->", line);
-
+                let msg;
 
 
                 try{
 
-                    const msg = JSON.parse(line);
+                    msg = JSON.parse(line);
+
+                }
+                catch(e){
+
+                    console.log(
+                        "⚠ JSON inválido:",
+                        line
+                    );
+
+                    continue;
+
+                }
 
 
 
-                    // Login aceito
+                console.log(
+                    "📥 POOL JSON:",
+                    msg
+                );
 
-                    if(
-                        msg.result &&
-                        msg.result.status === "OK"
-                    ){
+
+
+                /*
+                    LOGIN OK
+                */
+
+                if(
+                    msg.result &&
+                    msg.result.status === "OK"
+                ){
+
+                    sendClient({
+
+                        id:msg.id || 1,
+
+                        jsonrpc:"2.0",
+
+                        result:{
+                            status:"OK"
+                        }
+
+                    });
+
+
+                    /*
+                       Caso a pool mande job junto
+                    */
+
+                    if(msg.result.job){
 
                         sendClient({
-
-                            id:msg.id || 1,
 
                             jsonrpc:"2.0",
 
-                            result:{
-                                status:"OK"
-                            }
-
-                        });
-
-
-                        continue;
-
-                    }
-
-
-
-                    // Job recebido
-
-                    if(
-                        msg.method === "job" &&
-                        msg.params
-                    ){
-
-                        sendClient({
-
                             method:"job",
 
-                            params:msg.params
+                            params:msg.result.job
 
                         });
-
-
-                        continue;
 
                     }
 
 
+                    continue;
 
-                    // outras mensagens
+                }
+
+
+
+                /*
+                    JOB
+                */
+
+                if(
+                    msg.method === "job"
+                ){
+
+                    sendClient({
+
+                        jsonrpc:"2.0",
+
+                        method:"job",
+
+                        params:msg.params
+
+                    });
+
+
+                    continue;
+
+                }
+
+
+
+                /*
+                    SHARE RESULT
+                */
+
+
+                if(
+                    msg.result ||
+                    msg.error
+                ){
 
                     sendClient(msg);
 
-
-
-                }catch(e){
-
-                    console.log(
-                        "⚠️ JSON pool inválido"
-                    );
+                    continue;
 
                 }
+
+
+
+                sendClient(msg);
+
 
             }
 
@@ -210,10 +285,12 @@ wss.on("connection", (ws, req) => {
 
 
 
+
+
         pool.on("error",(err)=>{
 
             console.log(
-                "❌ Erro pool:",
+                "❌ Pool erro:",
                 err.message
             );
 
@@ -224,22 +301,29 @@ wss.on("connection", (ws, req) => {
         pool.on("close",()=>{
 
             console.log(
-                "🔌 Pool desconectada"
+                "🔌 Pool fechada"
             );
 
         });
+
 
 
     }
 
 
 
+
+
+
     ws.on("message",(raw)=>{
 
 
+        const text = raw.toString();
+
+
         console.log(
-            "\n📥 WASM ->",
-            raw.toString()
+            "\n📥 WASM:",
+            text
         );
 
 
@@ -248,14 +332,13 @@ wss.on("connection", (ws, req) => {
 
         try{
 
-            data = JSON.parse(
-                raw.toString()
-            );
+            data = JSON.parse(text);
 
-        }catch(e){
+        }
+        catch(e){
 
             console.log(
-                "Mensagem inválida"
+                "⚠ JSON WASM inválido"
             );
 
             return;
@@ -264,14 +347,14 @@ wss.on("connection", (ws, req) => {
 
 
 
+
         /*
             LOGIN
         */
 
+
         if(
-            data.method === "login" ||
-            data.identifier === "login" ||
-            data.identifier === "handshake"
+            data.method === "login"
         ){
 
             connectPool(data);
@@ -282,26 +365,29 @@ wss.on("connection", (ws, req) => {
 
 
 
+
+
         /*
             SUBMIT SHARE
         */
 
+
         if(
-            data.method === "submit" ||
-            data.identifier === "submit"
+            data.method === "submit"
         ){
 
 
             if(pool){
 
+                console.log(
+                    "📤 SHARE -> POOL"
+                );
+
+
                 pool.write(
                     JSON.stringify(data)+"\n"
                 );
 
-
-                console.log(
-                    "📤 Share enviado"
-                );
 
             }
 
@@ -313,12 +399,15 @@ wss.on("connection", (ws, req) => {
 
 
         console.log(
-            "⚠️ Método desconhecido:",
+            "⚠ Método desconhecido:",
             data
         );
 
 
+
     });
+
+
 
 
 
@@ -326,7 +415,7 @@ wss.on("connection", (ws, req) => {
 
 
         console.log(
-            "🔌 Cliente saiu"
+            "🔌 WASM desconectou"
         );
 
 
@@ -340,7 +429,9 @@ wss.on("connection", (ws, req) => {
     });
 
 
+
 });
+
 
 
 
@@ -350,7 +441,7 @@ httpServer.listen(
     ()=>{
 
         console.log(
-            `🌐 Escutando ${PORT}`
+            `🌐 WebSocket ativo na porta ${PORT}`
         );
 
     }
