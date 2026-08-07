@@ -18,6 +18,11 @@ server.on("connection", (ws) => {
     let poolSocket = null;
     let buffer = "";
 
+
+    ws.on("message", (msg)=>{
+        console.log("RAW CLIENTE:", msg.toString());
+    });
+
     ws.on("message", (msg) => {
         try {
             const data = JSON.parse(msg.toString());
