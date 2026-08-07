@@ -126,12 +126,13 @@ wss.on("connection", (ws, req) => {
 
                             // Job
                             if (
-                                poolData.result?.job
+                                poolData.method === "job" &&
+                                poolData.params
                             ) {
 
                                 ws.send(JSON.stringify({
                                     identifier:"job",
-                                    ...poolData.result.job
+                                    ...poolData.params
                                 }));
 
                                 console.log(
