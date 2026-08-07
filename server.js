@@ -20,7 +20,13 @@ const wss = new WebSocket.Server({
 
 });
 
+process.on("uncaughtException", (err) => {
+    console.log("❌ EXCEPTION:", err);
+});
 
+process.on("unhandledRejection", (err) => {
+    console.log("❌ REJECTION:", err);
+});
 
 console.log(`🚀 Proxy Stratum Node ativo na porta ${PORT}`);
 
