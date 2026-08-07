@@ -30,7 +30,7 @@ process.on("unhandledRejection", (err) => {
 
 console.log(`🚀 Proxy Stratum Node ativo na porta ${PORT}`);
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
     console.log("🔗 Cliente WebSocket conectado");
 
     let poolSocket = null;
@@ -214,4 +214,8 @@ wss.on("connection", (ws) => {
 
     });
 
+});
+
+httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 Servidor ouvindo na porta ${PORT}`);
 });
