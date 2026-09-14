@@ -4,8 +4,8 @@ const http = require("http");
 
 const PORT = process.env.PORT || 8080;
 
-const POOL_HOST = "gulf.moneroocean.stream";
-const POOL_PORT = 10128;
+const POOL_HOST = "xmrpool.eu";
+const POOL_PORT = 5555;
 
 
 const httpServer = http.createServer((req, res) => {
