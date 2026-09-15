@@ -4,9 +4,12 @@ const http = require("http");
 
 const PORT = process.env.PORT || 8080;
 
-// XMRPool.eu
 const POOL_HOST = "xmrpool.eu";
 const POOL_PORT = 5555;
+
+// ============================================================
+// HTTP
+// ============================================================
 
 const httpServer = http.createServer((req, res) => {
     res.writeHead(200, {
@@ -16,12 +19,16 @@ const httpServer = http.createServer((req, res) => {
     res.end("XMR WebSocket Proxy online");
 });
 
+// ============================================================
+// WEBSOCKET
+// ============================================================
+
 const wss = new WebSocket.Server({
     server: httpServer
 });
 
 console.log("🚀 Proxy iniciado");
-console.log(`⛏️ Pool: ${POOL_HOST}:${POOL_PORT}`);
+console.log(`🎯 Pool: ${POOL_HOST}:${POOL_PORT}`);
 
 wss.on("connection", (ws, req) => {
 
@@ -29,13 +36,18 @@ wss.on("connection", (ws, req) => {
     console.log("Origin:", req.headers.origin);
 
     let pool = null;
-    let poolBuffer = "";
-    let loginData = null;
+    let buffer = "";
+
+    // ========================================================
+    // Envia JSON para o WASM
+    // ========================================================
 
     function sendClient(data) {
 
-        if (ws.readyState !== WebSocket.OPEN)
+        if (ws.readyState !== WebSocket.OPEN) {
+            console.log("⚠ WASM não está conectado");
             return;
+        }
 
         const msg = JSON.stringify(data);
 
@@ -44,27 +56,19 @@ wss.on("connection", (ws, req) => {
         ws.send(msg);
     }
 
+    // ========================================================
+    // Conecta no XMRPool
+    // ========================================================
+
     function connectPool(data) {
 
-        loginData = data;
-
         if (pool) {
+            console.log("♻ Fechando conexão anterior com pool...");
             pool.destroy();
             pool = null;
         }
 
-        /*
-         * O minerador deve mandar:
-         *
-         * wallet + worker
-         *
-         * Exemplo:
-         *
-         * 4xxxxxxxxxxxxxxxx+iphone_13
-         *
-         * NÃO transformar em wallet.worker.
-         * NÃO separar o worker.
-         */
+        buffer = "";
 
         const login =
             data.params?.login ||
@@ -73,10 +77,12 @@ wss.on("connection", (ws, req) => {
 
         const pass =
             data.params?.pass ||
+            data.pass ||
             "x";
 
         const agent =
             data.params?.agent ||
+            data.agent ||
             "MoneroMiner/1.0.0";
 
         console.log("\n🔐 LOGIN recebido do WASM:");
@@ -84,91 +90,35 @@ wss.on("connection", (ws, req) => {
         console.log("   pass:", pass);
         console.log("   agent:", agent);
 
-        /*
-         * Validação simples.
-         *
-         * Para XMRPool.eu esperamos:
-         *
-         * WALLET+WORKER
-         */
-
-        if (!login) {
-
-            console.log("❌ Login vazio");
-
-            sendClient({
-                id: data.id || 1,
-                jsonrpc: "2.0",
-                error: {
-                    code: -1,
-                    message: "Wallet/login vazio"
-                }
-            });
-
-            return;
-        }
-
-        if (!login.includes("+")) {
-
-            console.log(
-                "⚠️ AVISO: login não contém '+worker'"
-            );
-
-            console.log(
-                "   Esperado: WALLET+WORKER"
-            );
-
-        }
-
         console.log(
             "📌 Login final para XMRPool.eu:",
             login
         );
 
-        console.log(
-            "🔌 Conectando em XMRPool.eu..."
-        );
+        console.log("🔌 Conectando em XMRPool.eu...");
 
         pool = net.createConnection({
             host: POOL_HOST,
             port: POOL_PORT
         });
 
+        // ====================================================
+        // POOL CONNECTED
+        // ====================================================
+
         pool.on("connect", () => {
 
-            console.log(
-                "✅ XMRPool.eu conectada"
-            );
-
-            /*
-             * IMPORTANTE:
-             *
-             * O login é encaminhado exatamente
-             * como recebido.
-             *
-             * Exemplo:
-             *
-             * 4xxxxx+iphone_13
-             */
+            console.log("✅ XMRPool.eu conectada");
 
             const loginRequest = {
-
                 id: data.id || 1,
-
                 jsonrpc: "2.0",
-
                 method: "login",
-
                 params: {
-
                     login: login,
-
                     pass: pass,
-
                     agent: agent
-
                 }
-
             };
 
             const payload =
@@ -180,25 +130,32 @@ wss.on("connection", (ws, req) => {
             );
 
             pool.write(payload);
-
         });
 
-        /*
-         * Dados recebidos da pool
-         */
+        // ====================================================
+        // POOL DATA
+        // ====================================================
 
         pool.on("data", (chunk) => {
 
-            poolBuffer += chunk.toString();
+            const raw = chunk.toString();
 
-            const lines = poolBuffer.split("\n");
+            console.log(
+                "📥 XMRPool.eu RAW:",
+                raw
+            );
 
-            poolBuffer = lines.pop();
+            buffer += raw;
+
+            const lines = buffer.split("\n");
+
+            buffer = lines.pop();
 
             for (const line of lines) {
 
-                if (!line.trim())
+                if (!line.trim()) {
                     continue;
+                }
 
                 let msg;
 
@@ -206,16 +163,14 @@ wss.on("connection", (ws, req) => {
 
                     msg = JSON.parse(line);
 
-                }
-                catch (e) {
+                } catch (e) {
 
                     console.log(
-                        "⚠️ JSON inválido da pool:",
+                        "⚠ JSON inválido recebido da pool:",
                         line
                     );
 
                     continue;
-
                 }
 
                 console.log(
@@ -223,90 +178,123 @@ wss.on("connection", (ws, req) => {
                     msg
                 );
 
-                /*
-                 * LOGIN OK
-                 */
+                // =================================================
+                // LOGIN RESPONSE
+                //
+                // IMPORTANTE:
+                // Preserva result.id, que é o SESSION ID.
+                // =================================================
 
                 if (
                     msg.result &&
                     msg.result.status === "OK"
                 ) {
 
+                    console.log(
+                        "✅ LOGIN ACEITO PELO XMRPool.eu"
+                    );
+
+                    if (msg.result.id !== undefined) {
+
+                        console.log(
+                            "🆔 SESSION ID:",
+                            msg.result.id
+                        );
+                    }
+
+                    // Envia o RESULT COMPLETO para o WASM.
+                    //
+                    // NÃO fazer:
+                    // result: { status: "OK" }
+                    //
+                    // porque isso apagaria result.id.
+
                     sendClient({
-
                         id: msg.id || 1,
-
                         jsonrpc: "2.0",
-
-                        result: {
-                            status: "OK"
-                        }
-
+                        result: msg.result
                     });
 
-                    /*
-                     * Algumas pools podem mandar
-                     * o primeiro job junto com login.
-                     */
+                    // =================================================
+                    // JOB INICIAL
+                    // =================================================
 
                     if (msg.result.job) {
 
+                        console.log(
+                            "📋 Enviando JOB inicial para WASM"
+                        );
+
                         sendClient({
-
                             jsonrpc: "2.0",
-
                             method: "job",
-
                             params: msg.result.job
-
                         });
-
                     }
 
                     continue;
                 }
 
-                /*
-                 * JOB
-                 */
+                // =================================================
+                // NOVO JOB
+                // =================================================
 
                 if (msg.method === "job") {
 
+                    console.log(
+                        "📋 Novo JOB recebido da pool:",
+                        msg.params?.job_id
+                    );
+
                     sendClient({
-
                         jsonrpc: "2.0",
-
                         method: "job",
-
                         params: msg.params
-
                     });
 
                     continue;
                 }
 
-                /*
-                 * RESULTADO DO SHARE
-                 */
+                // =================================================
+                // SUBMIT RESPONSE / ERROR
+                // =================================================
 
                 if (
                     msg.result !== undefined ||
                     msg.error !== undefined
                 ) {
 
+                    if (msg.error) {
+
+                        console.log(
+                            "❌ POOL REJEITOU:",
+                            msg.error
+                        );
+
+                    } else {
+
+                        console.log(
+                            "✅ POOL RESPONDEU:",
+                            msg.result
+                        );
+                    }
+
                     sendClient(msg);
 
                     continue;
                 }
 
-                /*
-                 * Qualquer outra mensagem
-                 */
+                // =================================================
+                // QUALQUER OUTRA MENSAGEM
+                // =================================================
 
                 sendClient(msg);
             }
-
         });
+
+        // ====================================================
+        // POOL ERROR
+        // ====================================================
 
         pool.on("error", (err) => {
 
@@ -314,24 +302,23 @@ wss.on("connection", (ws, req) => {
                 "❌ XMRPool.eu erro:",
                 err.message
             );
-
         });
+
+        // ====================================================
+        // POOL CLOSE
+        // ====================================================
 
         pool.on("close", () => {
 
             console.log(
                 "🔌 XMRPool.eu conexão fechada"
             );
-
-            pool = null;
-
         });
-
     }
 
-    /*
-     * Mensagens do WASM
-     */
+    // ========================================================
+    // MENSAGENS DO WASM
+    // ========================================================
 
     ws.on("message", (raw) => {
 
@@ -348,19 +335,18 @@ wss.on("connection", (ws, req) => {
 
             data = JSON.parse(text);
 
-        }
-        catch (e) {
+        } catch (e) {
 
             console.log(
-                "⚠️ JSON WASM inválido"
+                "⚠ JSON WASM inválido"
             );
 
             return;
         }
 
-        /*
-         * LOGIN
-         */
+        // ====================================================
+        // LOGIN
+        // ====================================================
 
         if (data.method === "login") {
 
@@ -369,23 +355,33 @@ wss.on("connection", (ws, req) => {
             return;
         }
 
-        /*
-         * SUBMIT SHARE
-         */
+        // ====================================================
+        // SUBMIT SHARE
+        // ====================================================
 
         if (data.method === "submit") {
 
             if (!pool) {
 
                 console.log(
-                    "⚠️ Share recebido sem pool"
+                    "❌ SHARE recebido mas pool não está conectada"
                 );
+
+                sendClient({
+                    id: data.id || 1,
+                    jsonrpc: "2.0",
+                    error: {
+                        code: -1,
+                        message: "Pool not connected"
+                    }
+                });
 
                 return;
             }
 
             console.log(
-                "📤 SHARE -> XMRPool.eu"
+                "📤 SHARE -> XMRPool.eu:",
+                JSON.stringify(data)
             );
 
             pool.write(
@@ -395,29 +391,19 @@ wss.on("connection", (ws, req) => {
             return;
         }
 
-        /*
-         * PING
-         */
-
-        if (data.method === "keepalive") {
-
-            if (pool) {
-
-                pool.write(
-                    JSON.stringify(data) + "\n"
-                );
-
-            }
-
-            return;
-        }
+        // ====================================================
+        // MÉTODO DESCONHECIDO
+        // ====================================================
 
         console.log(
-            "⚠️ Método desconhecido:",
-            data
+            "⚠ Método desconhecido:",
+            data.method
         );
-
     });
+
+    // ========================================================
+    // WASM CLOSE
+    // ========================================================
 
     ws.on("close", () => {
 
@@ -429,21 +415,31 @@ wss.on("connection", (ws, req) => {
 
             pool.destroy();
             pool = null;
-
         }
-
     });
+
+    // ========================================================
+    // WASM ERROR
+    // ========================================================
 
     ws.on("error", (err) => {
 
         console.log(
-            "❌ WebSocket erro:",
+            "❌ WebSocket WASM erro:",
             err.message
         );
 
-    });
+        if (pool) {
 
+            pool.destroy();
+            pool = null;
+        }
+    });
 });
+
+// ============================================================
+// HTTP SERVER
+// ============================================================
 
 httpServer.listen(
     PORT,
@@ -454,5 +450,8 @@ httpServer.listen(
             `🌐 WebSocket ativo na porta ${PORT}`
         );
 
+        console.log(
+            `🎯 XMRPool.eu: ${POOL_HOST}:${POOL_PORT}`
+        );
     }
 );
